@@ -1,6 +1,7 @@
 import XCTest
 import Foundation
 import MCP
+import SQLite3
 @testable import WarpCommandRunner
 
 // MARK: - Interactive command detection
@@ -478,5 +479,145 @@ final class RemoteHTTPBindPinTests: XCTestCase {
         let data = try Data(contentsOf: url)
         XCTAssertFalse(data.isEmpty, "pinned file missing or empty: \(relative)")
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+// MARK: - Warp block history
+
+final class WarpBlockHistoryTests: XCTestCase {
+
+    private var dbPath: String!
+
+    override func setUp() {
+        super.setUp()
+        dbPath = NSTemporaryDirectory() + "wcr_warp_fixture_\(UUID().uuidString).sqlite"
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(atPath: dbPath)
+        super.tearDown()
+    }
+
+    func testStripsPerCharacterStylingFromCommand() {
+        let styled = "echo".map { "\u{1B}[1m\($0)\u{1B}[0m" }.joined()
+        XCTAssertEqual(WarpBlockHistory.stripTerminalControls(styled), "echo")
+    }
+
+    func testStripsColoursTitlesAndResolvesCarriageReturns() {
+        let raw = "\u{1B}[31merror\u{1B}[0m\r\n\u{1B}]0;title\u{07}ok\r\nprogress 10%\rprogress 100%\r\n"
+        XCTAssertEqual(WarpBlockHistory.stripTerminalControls(raw), "error\nok\nprogress 100%\n")
+    }
+
+    func testTailKeepsTheEndAndCountsOmittedLines() {
+        let text = (1...10).map { "line \($0)" }.joined(separator: "\n") + "\n\n"
+        let result = WarpBlockHistory.tail(text, maxLines: 3, maxChars: 1_000)
+        XCTAssertEqual(result.text, "line 8\nline 9\nline 10")
+        XCTAssertEqual(result.omittedLines, 7)
+    }
+
+    func testParsesWarpTimestampsAsUTC() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(identifier: "UTC"))
+        let expected = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 10, hour: 21, minute: 2, second: 56)))
+        let parsed = try XCTUnwrap(WarpBlockHistory.parseTimestamp("2026-10-10 21:02:56.899276"))
+        XCTAssertEqual(parsed.timeIntervalSince(expected), 0.899, accuracy: 0.01)
+    }
+
+    func testReadsExecutedBlocksFromActiveTabOldestFirst() throws {
+        try makeFixture()
+        let (tab, blocks) = try WarpBlockHistory(databasePath: dbPath).recentBlocks(count: 3)
+        XCTAssertEqual(tab.title, "api")
+        XCTAssertEqual(tab.tabIndex, 1)
+        XCTAssertEqual(tab.tabCount, 2)
+        XCTAssertEqual(tab.cwd, "/tmp/api")
+        // Skips the other tab's block, the never-executed one and background output.
+        XCTAssertEqual(blocks.map(\.command), ["make", "npm test"])
+        XCTAssertEqual(blocks.map(\.exitCode), [2, 1])
+        XCTAssertEqual(blocks[0].output, "boom\n")
+        XCTAssertEqual(blocks[0].gitBranch, "main")
+    }
+
+    func testDefaultCountReturnsOnlyTheLastBlock() throws {
+        try makeFixture()
+        let (_, blocks) = try WarpBlockHistory(databasePath: dbPath).recentBlocks(count: 1)
+        XCTAssertEqual(blocks.map(\.command), ["npm test"])
+    }
+
+    func testRefusesToGuessBetweenWindows() throws {
+        try makeFixture(windows: "INSERT INTO windows VALUES (1, 1), (2, 0);")
+        XCTAssertThrowsError(try WarpBlockHistory(databasePath: dbPath).recentBlocks(count: 1)) { error in
+            guard case WarpBlockHistoryError.ambiguousWindow(let count) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(count, 2)
+        }
+    }
+
+    func testUsesRecordedActiveWindow() throws {
+        try makeFixture(windows: "INSERT INTO windows VALUES (1, 1), (2, 0);", app: "INSERT INTO app VALUES (1, 1);")
+        let (tab, _) = try WarpBlockHistory(databasePath: dbPath).recentBlocks(count: 1)
+        XCTAssertEqual(tab.title, "api")
+    }
+
+    func testMissingDatabaseFailsWithReadableError() {
+        XCTAssertThrowsError(try WarpBlockHistory(databasePath: dbPath).recentBlocks(count: 1)) { error in
+            guard case WarpBlockHistoryError.cannotOpen = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testRenderShowsCommandExitCodeDurationAndOutput() {
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        let rendered = WarpBlockHistory.render(
+            tab: WarpActiveTab(tabIndex: 1, tabCount: 2, title: "api", cwd: "/tmp/api", paneUUID: Data([0xBB])),
+            blocks: [WarpBlock(command: "npm test", output: "1 failing\n", exitCode: 1, pwd: "/tmp/api",
+                               gitBranch: "main", startedAt: start, completedAt: start.addingTimeInterval(9))],
+            now: start.addingTimeInterval(120)
+        )
+        XCTAssertTrue(rendered.contains("Warp active tab: 2 of 2, \"api\", /tmp/api"), rendered)
+        XCTAssertTrue(rendered.contains("[1] $ npm test"), rendered)
+        XCTAssertTrue(rendered.contains("exit 1"), rendered)
+        XCTAssertTrue(rendered.contains("(2m ago)"), rendered)
+        XCTAssertTrue(rendered.contains("took 9.0s"), rendered)
+        XCTAssertTrue(rendered.contains("git main"), rendered)
+        XCTAssertTrue(rendered.hasSuffix("1 failing\n"), rendered)
+    }
+
+    /// One window with two tabs; the second ("api") is active and holds the history.
+    private func makeFixture(
+        windows: String = "INSERT INTO windows VALUES (1, 1);",
+        app: String = "INSERT INTO app VALUES (1, NULL);"
+    ) throws {
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(dbPath, &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+        let esc = "char(27)"
+        let sql = """
+        CREATE TABLE app (id INTEGER PRIMARY KEY, active_window_id INTEGER);
+        CREATE TABLE windows (id INTEGER PRIMARY KEY, active_tab_index INTEGER NOT NULL);
+        CREATE TABLE tabs (id INTEGER PRIMARY KEY, window_id INTEGER NOT NULL, custom_title TEXT);
+        CREATE TABLE pane_nodes (id INTEGER PRIMARY KEY, tab_id INTEGER NOT NULL, parent_pane_node_id INTEGER, flex FLOAT, is_leaf BOOLEAN NOT NULL);
+        CREATE TABLE pane_leaves (pane_node_id INTEGER NOT NULL, kind TEXT NOT NULL, is_focused BOOLEAN NOT NULL);
+        CREATE TABLE terminal_panes (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, uuid BLOB NOT NULL UNIQUE, cwd TEXT, is_active BOOLEAN NOT NULL);
+        CREATE TABLE blocks (id INTEGER PRIMARY KEY, pane_leaf_uuid BLOB NOT NULL, stylized_command BLOB NOT NULL, stylized_output BLOB NOT NULL,
+            pwd TEXT, git_branch TEXT, exit_code INTEGER NOT NULL, did_execute BOOLEAN NOT NULL, completed_ts DATETIME, start_ts DATETIME,
+            is_background BOOLEAN NOT NULL DEFAULT false, git_branch_name TEXT);
+        \(app)
+        \(windows)
+        INSERT INTO tabs VALUES (1, 1, 'first'), (2, 1, 'api');
+        INSERT INTO pane_nodes VALUES (1, 1, NULL, NULL, 1), (2, 2, NULL, NULL, 1);
+        INSERT INTO pane_leaves VALUES (1, 'terminal', 1), (2, 'terminal', 1);
+        INSERT INTO terminal_panes VALUES (1, 'terminal', X'AA', '/tmp/first', 1), (2, 'terminal', X'BB', '/tmp/api', 1);
+        INSERT INTO blocks (id, pane_leaf_uuid, stylized_command, stylized_output, pwd, exit_code, did_execute, start_ts, completed_ts, is_background, git_branch_name) VALUES
+          (1, X'AA', CAST('ls' AS BLOB), CAST('a b' AS BLOB), '/tmp/first', 0, 1, '2026-10-10 20:00:00.000000', '2026-10-10 20:00:01.000000', 0, NULL),
+          (2, X'BB', CAST(\(esc) || '[1mmake' || \(esc) || '[0m' AS BLOB), CAST(\(esc) || '[31mboom' || \(esc) || '[0m' || char(13) || char(10) AS BLOB),
+             '/tmp/api', 2, 1, '2026-10-10 20:01:00.000000', '2026-10-10 20:01:03.500000', 0, 'main'),
+          (3, X'BB', CAST('half-typed' AS BLOB), CAST('' AS BLOB), '/tmp/api', 0, 0, '2026-10-10 20:02:00.000000', '2026-10-10 20:02:00.000000', 0, 'main'),
+          (4, X'BB', CAST('' AS BLOB), CAST('background noise' AS BLOB), '/tmp/api', 0, 1, '2026-10-10 20:03:00.000000', '2026-10-10 20:03:00.000000', 1, 'main'),
+          (5, X'BB', CAST('npm test' AS BLOB), CAST('1 failing' AS BLOB), '/tmp/api', 1, 1, '2026-10-10 20:04:00.000000', '2026-10-10 20:04:09.000000', 0, 'main');
+        """
+        let rc = sqlite3_exec(db, sql, nil, nil, nil)
+        XCTAssertEqual(rc, SQLITE_OK, String(cString: sqlite3_errmsg(db)))
     }
 }
