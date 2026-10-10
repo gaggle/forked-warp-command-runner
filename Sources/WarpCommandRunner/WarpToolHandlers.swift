@@ -5,9 +5,11 @@ import Logging
 /// Tool handlers for Warp-specific v6.0 surface:
 ///   - `focus_warp_session` — dispatch `warp://session/<uuid>` to focus a pane
 ///   - `emit_warp_event`    — emit OSC 777 `warp://cli-agent` JSON to Warp's UI
+///   - `get_recent_warp_blocks` — read the active tab's last commands + output
 ///
-/// Both rely on Warp being installed and registered as the handler for the
-/// `warp://` URL scheme; no dependency on Warp's source.
+/// The first two rely on Warp being installed and registered as the handler
+/// for the `warp://` URL scheme; the third reads Warp's local SQLite database
+/// (see WarpBlockHistory.swift). No dependency on Warp's source.
 
 // MARK: - focus_warp_session
 
@@ -123,6 +125,32 @@ func handleEmitWarpEvent(params: CallTool.Parameters, logger: Logger) async -> C
         content: [.text(result)],
         isError: false
     )
+}
+
+// MARK: - get_recent_warp_blocks
+
+func handleGetRecentWarpBlocks(params: CallTool.Parameters, logger: Logger) async -> CallTool.Result {
+    let requested = intArgument(params.arguments?["count"]) ?? 1
+    let count = min(max(requested, 1), WarpBlockHistory.maxCount)
+
+    guard let path = WarpBlockHistory.locateDatabase() else {
+        return CallTool.Result(
+            content: [.text("❌ \(WarpBlockHistoryError.databaseNotFound)")],
+            isError: true
+        )
+    }
+
+    do {
+        let (tab, blocks) = try WarpBlockHistory(databasePath: path).recentBlocks(count: count)
+        logger.info("get_recent_warp_blocks returned \(blocks.count) block(s) from tab \(tab.tabIndex + 1)")
+        return CallTool.Result(
+            content: [.text(WarpBlockHistory.render(tab: tab, blocks: blocks, now: Date()))],
+            isError: false
+        )
+    } catch {
+        logger.warning("get_recent_warp_blocks failed: \(error)")
+        return CallTool.Result(content: [.text("❌ \(error)")], isError: true)
+    }
 }
 
 /// Render ESC and BEL as visible mnemonics so the result text is safe to
