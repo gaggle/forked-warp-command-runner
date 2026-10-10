@@ -76,21 +76,34 @@ public struct TerminalConfig {
         return getBundleIdentifiers(for: terminal).first!
     }
     
-    /// Get database path for Warp terminals
+    /// Get database path for Warp terminals, or nil if none exists.
+    ///
+    /// Current Warp builds keep `warp.sqlite` in the app group container
+    /// (`~/Library/Group Containers/<team>.dev.warp/Library/Application Support/<bundle id>/`);
+    /// older builds used `~/Library/Application Support/<bundle id>/`. Reading
+    /// the group container needs Full Disk Access, without which the file
+    /// looks absent.
     public static func getWarpDatabasePath(for terminal: TerminalType) -> String? {
-        let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
-        
-        switch terminal {
-        case .warp:
-            // Check Stable variant first (more common), then standard
-            let stablePath = "\(homeDir)/Library/Application Support/dev.warp.Warp-Stable/warp.sqlite"
-            let standardPath = "\(homeDir)/Library/Application Support/dev.warp.Warp/warp.sqlite"
-            return FileManager.default.fileExists(atPath: stablePath) ? stablePath : standardPath
-        case .warpPreview:
-            return "\(homeDir)/Library/Application Support/dev.warp.Warp-Preview/warp.sqlite"
-        default:
-            return nil
+        guard supportsDatabaseIntegration(terminal) else { return nil }
+        let fileManager = FileManager.default
+        let library = fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library")
+
+        let groupContainers = library.appendingPathComponent("Group Containers")
+        let groupRoots = ((try? fileManager.contentsOfDirectory(atPath: groupContainers.path)) ?? [])
+            .filter { $0.hasSuffix(".dev.warp") }
+            .sorted()
+            .map { groupContainers.appendingPathComponent($0).appendingPathComponent("Library/Application Support") }
+        let roots = groupRoots + [library.appendingPathComponent("Application Support")]
+
+        for root in roots {
+            for bundleId in getBundleIdentifiers(for: terminal) {
+                let path = root.appendingPathComponent(bundleId).appendingPathComponent("warp.sqlite").path
+                if fileManager.fileExists(atPath: path) {
+                    return path
+                }
+            }
         }
+        return nil
     }
     
     /// Check if terminal supports database integration
