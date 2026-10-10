@@ -887,6 +887,20 @@ struct WarpCommandRunner: AsyncParsableCommand {
                         "properties": .object([:]),
                         "required": .array([])
                     ])
+                ),
+                Tool(
+                    name: "get_recent_warp_blocks",
+                    description: "Read the most recent commands the user ran in Warp's active tab: command, exit code, time, working directory, git branch, and output with terminal styling removed (long output keeps its last 200 lines). Use when the user refers to something they just ran or saw in Warp, e.g. 'this fails' or 'what went wrong'. Read-only. Reads Warp's local session-restoration database, so only finished commands appear; needs Full Disk Access on Warp Command Runner.",
+                    inputSchema: .object([
+                        "type": .string("object"),
+                        "properties": .object([
+                            "count": .object([
+                                "type": .string("integer"),
+                                "description": .string("How many recent commands to return, oldest first (default 1, max 10)")
+                            ])
+                        ]),
+                        "required": .array([])
+                    ])
                 )
             ])
         }
@@ -997,6 +1011,9 @@ struct WarpCommandRunner: AsyncParsableCommand {
                 return await handleEmitWarpEvent(params: params, logger: logger)
             case "shell_shim_status":
                 return await handleShellShimStatus(params: params, logger: logger)
+            // Warp block history (read-only)
+            case "get_recent_warp_blocks":
+                return await handleGetRecentWarpBlocks(params: params, logger: logger)
             default:
                 return CallTool.Result(
                     content: [.text("Unknown tool: \(params.name)")],
