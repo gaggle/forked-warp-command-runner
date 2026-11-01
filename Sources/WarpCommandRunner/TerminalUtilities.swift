@@ -33,9 +33,18 @@ func startedMarkerPath(forScript scriptPath: String) -> String {
     "\(scriptPath).started"
 }
 
-/// Shell line that touches `startedMarkerPath(forScript:)`.
+/// Marker a generated script touches when it exits, so the next background
+/// send to Warp can wait instead of typing into the still-running script.
+func doneMarkerPath(forScript scriptPath: String) -> String {
+    "\(scriptPath).done"
+}
+
+/// Shell lines that touch `startedMarkerPath(forScript:)` now and
+/// `doneMarkerPath(forScript:)` on exit.
 func startedMarkerLine(forScript scriptPath: String) -> String {
-    ": > \"\(escapeForDoubleQuotedShell(startedMarkerPath(forScript: scriptPath)))\""
+    let started = escapeForDoubleQuotedShell(startedMarkerPath(forScript: scriptPath))
+    let done = escapeForDoubleQuotedShell(doneMarkerPath(forScript: scriptPath))
+    return "trap ': > \"\(done)\"' EXIT\n: > \"\(started)\""
 }
 
 /// How long a background Warp send waits for the start marker.

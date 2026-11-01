@@ -206,8 +206,8 @@ private func keystrokeSendToCurrentTab(terminal: TerminalConfig.TerminalType, co
 private func closeTabAppleScript(for terminal: TerminalConfig.TerminalType) -> String {
     switch terminal {
     case .warp, .warpPreview:
-        // Warp's tab is closed through Accessibility (closeCurrentTab).
-        return "error \"Warp's tab is closed through Accessibility, not AppleScript\""
+        // Warp's tab is closed by typing `exit` (closeCurrentTab).
+        return "error \"Warp's tab is closed by typing exit, not via AppleScript\""
 
     case .alacritty:
         return """
@@ -242,13 +242,14 @@ private func closeTabAppleScript(for terminal: TerminalConfig.TerminalType) -> S
     }
 }
 
-/// Close the current tab. Warp's "File > Close Tab" is pressed through
-/// Accessibility so Warp stays in the background; others use AppleScript.
+/// Close the current tab. Warp gets `exit` typed in the background: it
+/// ignores menu presses while it isn't the front app, and its menu has no
+/// "Close Tab" item anyway. Others use AppleScript.
 @discardableResult
 private func closeCurrentTab(for terminal: TerminalConfig.TerminalType, logger: Logger) async -> (success: Bool, output: String) {
     if terminal == .warp || terminal == .warpPreview {
-        let r = WarpBackgroundTyping.pressMenuItem(menu: "File", item: "Close Tab", in: terminal, logger: logger)
-        if let error = r.error { logger.warning("Close Tab failed: \(error)") }
+        let r = await WarpBackgroundTyping.type("exit", into: terminal, logger: logger)
+        if let error = r.error { logger.warning("Closing Warp tab failed: \(error)") }
         return (r.success, r.error ?? "")
     }
     return await executeAppleScript(closeTabAppleScript(for: terminal), logger: logger)
@@ -462,7 +463,7 @@ func handleSendToSession(params: CallTool.Parameters, logger: Logger) async -> C
             let started = await waitForShimPreexec(command: command, afterTotal: shimBefore.total, timeout: warpStartTimeout)
             guard started else {
                 return CallTool.Result(
-                    content: [.text(WarpBackgroundTyping.notStartedMessage(terminal: terminal, waited: warpStartTimeout))],
+                    content: [.text(WarpBackgroundTyping.notConfirmedMessage(terminal: terminal, waited: warpStartTimeout))],
                     isError: true
                 )
             }

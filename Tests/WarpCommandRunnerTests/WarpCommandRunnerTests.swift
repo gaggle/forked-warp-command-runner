@@ -1006,6 +1006,20 @@ final class WarpBackgroundTypingTests: XCTestCase {
         let result = try await runProcess(executablePath: "/bin/bash", arguments: [scriptPath], timeout: 10)
         XCTAssertEqual(result.exitCode, 0, result.stderr)
         XCTAssertTrue(FileManager.default.fileExists(atPath: startedMarkerPath(forScript: scriptPath)))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: doneMarkerPath(forScript: scriptPath)))
+    }
+
+    func testDoneMarkerIsWrittenWhenTheCommandFails() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let scriptPath = dir.appendingPathComponent("wcr_script_x.sh").path
+        try "#!/bin/bash\n\(startedMarkerLine(forScript: scriptPath))\nexit 3\n"
+            .write(toFile: scriptPath, atomically: true, encoding: .utf8)
+
+        let result = try await runProcess(executablePath: "/bin/bash", arguments: [scriptPath], timeout: 10)
+        XCTAssertEqual(result.exitCode, 3)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: doneMarkerPath(forScript: scriptPath)))
     }
 
     func testWaitForFileTimesOutWhenNothingStarts() async {
@@ -1023,6 +1037,37 @@ final class WarpBackgroundTypingTests: XCTestCase {
         }
         let started = await WarpBackgroundTyping.waitForFile(path, timeout: 2, pollInterval: 0.02)
         XCTAssertTrue(started)
+    }
+
+    func testUnstartedScriptIsDeletedSoALateRunDoesNothing() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let scriptPath = dir.appendingPathComponent("wcr_script_x.sh").path
+        let ranPath = dir.appendingPathComponent("ran").path
+        try "#!/bin/bash\n\(startedMarkerLine(forScript: scriptPath))\n: > \"\(ranPath)\"\n"
+            .write(toFile: scriptPath, atomically: true, encoding: .utf8)
+
+        let started = await WarpBackgroundTyping.confirmStartOrDisarm(scriptPath: scriptPath, timeout: 0.1, pollInterval: 0.05)
+        XCTAssertFalse(started)
+
+        // The shell gets to the buffered keys after the busy command ends.
+        let late = try await runProcess(executablePath: "/bin/bash", arguments: [scriptPath], timeout: 10)
+        XCTAssertNotEqual(late.exitCode, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ranPath))
+    }
+
+    func testStartedScriptIsKept() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let scriptPath = dir.appendingPathComponent("wcr_script_x.sh").path
+        try "#!/bin/bash\n".write(toFile: scriptPath, atomically: true, encoding: .utf8)
+        FileManager.default.createFile(atPath: startedMarkerPath(forScript: scriptPath), contents: nil)
+
+        let started = await WarpBackgroundTyping.confirmStartOrDisarm(scriptPath: scriptPath, timeout: 0.1)
+        XCTAssertTrue(started)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: scriptPath))
     }
 
     func testShimBusReturnsOnlyEventsAfterSnapshot() async {

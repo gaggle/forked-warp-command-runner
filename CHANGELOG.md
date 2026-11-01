@@ -15,11 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Warp keystroke tools (`execute_command`, `execute_with_auto_retrieve`, `execute_with_streaming`, `run_template`, `send_to_session`) no longer bring Warp to the front. Keys are posted to Warp's process only, so typing in another app during a call isn't mixed into the command. A minimized or hidden Warp window is restored behind the front app. Warp must already be running.
-- `open_terminal_tab` opens Warp's new tab with `open -g`, and `close_session` / `cleanup_sessions` press Warp's **File > Close Tab** through Accessibility, both without activating Warp.
+- `close_session` / `cleanup_sessions` close a Warp tab by typing `exit` in the background. The old **File > Close Tab** menu item no longer exists in Warp, and Warp ignores menu presses while it isn't the front app. `open_terminal_tab` still brings Warp to the front: Warp activates itself when it handles `warp://action/new_tab`, even with `open -g`.
 
 ### Fixed
 
-- `execute_command` and `execute_with_streaming` report an error when Warp didn't start the command within 3 seconds (dropped keys, or the active tab still busy). Before, a dropped send was reported as success. `send_to_session` confirms the start through the shell shim when it's installed.
+- `execute_command` and `execute_with_streaming` report an error when Warp didn't start the command within 3 seconds (dropped keys, or the active tab still busy), and delete the script so it can't run later. Keys typed into a busy tab wait in the tty buffer and the shell runs them when the tab is free; that late run now prints "No such file or directory" instead of running the command. Before, a dropped send was reported as success.
+- Back-to-back Warp sends wait for the previous command this server sent to exit (up to 10 seconds, then an error). Before, the next command's keys were echoed into the previous command's output. `send_to_session` confirms the start through the shell shim when it's installed.
 - Tests: the test target now compiles and runs on Linux. Remote-mode tests are macOS-only, matching the remote sources.
 - The server exits 0 on SIGTERM or SIGINT. Before, it kept running until stdin closed.
 - The server exits 0 when stdin closes. Before, it exited 1 with "service finished unexpectedly".

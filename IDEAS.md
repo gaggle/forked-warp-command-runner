@@ -69,21 +69,34 @@ fall back to SIGKILL. Report it upstream first; fix if welcome.
 ### Type into Warp without bringing it to the front
 
 Warp keystroke tools post `CGEvent`s to Warp's PID (`WarpBackgroundTyping.swift`) after setting
-`AXMain` on its window, instead of `activate` + System Events. `execute_command` and
-`execute_with_streaming` scripts touch `<script>.started` first; no marker within 3 s is an error.
-`send_to_session` confirms through the shim's `preexec` when the shim has sent anything, otherwise
-says it's unconfirmed. New tab uses `open -g`; close tab presses File > Close Tab via `AXPress`.
-Typed events carry no modifier flags, so a held Cmd can't turn letters into Warp shortcuts.
+`AXMain` on its window, instead of `activate` + System Events. Typed events carry no modifier flags.
 
-**Unverified on real Warp:**
+- Generated scripts touch `<script>.started` first and `<script>.done` on exit (`trap … EXIT`).
+- No start marker within 3 s is an error, and the script is deleted: keys typed into a busy tab
+  wait in the tty and run once it's free, so without the delete a "failed" send ran later anyway.
+- Each send waits up to 10 s for the previous script this server sent to exit, else refuses
+  without typing. Before, the next command's keys were echoed into the previous block's output.
+- `send_to_session` confirms through the shim's `preexec` when the shim has sent anything,
+  otherwise says it's unconfirmed.
+- Close tab types `exit`. Warp's menu has no "Close Tab" (it's "Close Current Session"), and
+  Warp ignores AX menu presses while in the background.
+- New tab still activates Warp: Warp activates itself handling `warp://action/new_tab`, even with
+  `open -g`. Pressing File > New Terminal Tab via AX in the background opened a new *window*.
 
-- The whole path end to end from the installed bundle (the gate doesn't type into Warp).
-- `open -g warp://action/new_tab` and `AXPress` on Close Tab without activating.
-- Clearing flags really neutralises a held Cmd.
+**Verified live 2026-11-01** (installed signed bundle, Claude Desktop connector, Claude in front
+before and after every call): special characters byte-exact; busy tab cancelled and the late run
+was a harmless exit 127; back-to-back sends clean; send during our own `sleep 15` refused with
+nothing typed; minimized window restored behind Claude; close tab via `exit`; user typing in
+another app during three sends, nothing mixed in either way; user holding Cmd during a send, text
+exact and no shortcuts fired (timing of the hold not independently confirmed).
 
-**Not done:** waiting for a busy tab *before* typing. Block history only records finished
-commands, and shim events can't be tied to the active tab, so there's no reliable "busy" signal.
-A busy tab still swallows the keys; it's now reported as an error instead of success.
+**Not done:**
+
+- Waiting for a busy tab the *user* started. Block history only records finished commands, and
+  shim events can't be tied to the active tab, so there's no reliable "busy" signal. A busy tab
+  still swallows the keys; it's reported as an error and our script is cancelled.
+- `send_to_session` commands can't be cancelled or waited on (no script, no done marker).
+- New tab without activation.
 
 **Facts from the 2026-11-01 tests.**
 

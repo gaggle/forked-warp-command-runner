@@ -386,14 +386,14 @@ func handleExecuteWithStreaming(params: CallTool.Parameters, logger: Logger, con
     let bashCommand = "bash \"\(escapeForDoubleQuotedShell(tempScript))\""
     if preferredTerminal == .warp || preferredTerminal == .warpPreview {
         // Warp: type in the background (no activation) and confirm it started.
-        let typed = await WarpBackgroundTyping.type(bashCommand, into: preferredTerminal, logger: logger)
+        let typed = await WarpBackgroundTyping.type(bashCommand, into: preferredTerminal, scriptPath: tempScript, logger: logger)
         guard typed.success else {
             return CallTool.Result(
                 content: [.text("Failed to send command to \(preferredTerminal.rawValue): \(typed.error ?? "unknown error")")],
                 isError: true
             )
         }
-        guard await WarpBackgroundTyping.waitForFile(startedMarkerPath(forScript: tempScript), timeout: warpStartTimeout) else {
+        guard await WarpBackgroundTyping.confirmStartOrDisarm(scriptPath: tempScript, timeout: warpStartTimeout) else {
             return CallTool.Result(
                 content: [.text(WarpBackgroundTyping.notStartedMessage(terminal: preferredTerminal, waited: warpStartTimeout))],
                 isError: true

@@ -122,15 +122,15 @@ func handleExecuteCommandV2NoMonitoring(params: CallTool.Parameters, logger: Log
     // Warp: type in the background (no activation), then confirm the script
     // started, since dropped keys look the same as a good send.
     if preferredTerminal == .warp || preferredTerminal == .warpPreview {
-        let typed = await WarpBackgroundTyping.type(bashCommand, into: preferredTerminal, logger: logger)
+        let typed = await WarpBackgroundTyping.type(bashCommand, into: preferredTerminal, scriptPath: tempScriptFile, logger: logger)
         guard typed.success else {
             return CallTool.Result(
                 content: [.text("Failed to send command to \(preferredTerminal.rawValue): \(typed.error ?? "unknown error")")],
                 isError: true
             )
         }
-        let started = await WarpBackgroundTyping.waitForFile(
-            startedMarkerPath(forScript: tempScriptFile), timeout: warpStartTimeout
+        let started = await WarpBackgroundTyping.confirmStartOrDisarm(
+            scriptPath: tempScriptFile, timeout: warpStartTimeout
         )
         guard started else {
             logger.error("Warp didn't start command \(commandId)")

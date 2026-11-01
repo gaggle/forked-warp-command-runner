@@ -30,6 +30,19 @@ enum WarpBackgroundTyping {
 
     static let returnVirtualKey: UInt16 = 36
 
+    /// How long a send waits for this server's previous Warp command to exit.
+    static let previousCommandTimeout: TimeInterval = 10
+
+    /// Done marker of the last script this server typed into Warp. Keys sent
+    /// while it still runs would be echoed into its output and queued in the
+    /// tty, so the next send waits for it.
+    private actor PreviousCommand {
+        var donePath: String?
+        func set(_ path: String?) { donePath = path }
+        func clear(ifEqual path: String) { if donePath == path { donePath = nil } }
+    }
+    private static let previous = PreviousCommand()
+
     /// The keys that type `text`, one event per UTF-16 unit, then Return.
     static func keys(for text: String, pressReturn: Bool = true) -> [Key] {
         var keys = text.utf16.map(Key.unit)
@@ -38,14 +51,25 @@ enum WarpBackgroundTyping {
     }
 
     /// Type `command` into the focused pane of Warp's main window and press
-    /// Return, without activating Warp.
+    /// Return, without activating Warp. Waits for the previous script this
+    /// server sent to exit first. Pass `scriptPath` when `command` runs a
+    /// generated script, so the next send can wait for it in turn.
     @discardableResult
     static func type(
         _ command: String,
         into terminal: TerminalConfig.TerminalType,
+        scriptPath: String? = nil,
         logger: Logger
     ) async -> (success: Bool, error: String?) {
         #if canImport(AppKit)
+        if let done = await previous.donePath {
+            guard await waitForFile(done, timeout: previousCommandTimeout) else {
+                return (false, "The previous command this server sent to \(terminal.rawValue) is still running after \(Int(previousCommandTimeout))s. Wait for it to finish (get_command_output), or stop it in Warp, then retry.")
+            }
+            // Give the shell a moment to get back to its prompt.
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            await previous.set(nil)
+        }
         guard AXIsProcessTrusted() else {
             return (false, "Accessibility permission is missing for this binary. Grant it in System Settings > Privacy & Security > Accessibility.")
         }
@@ -67,45 +91,11 @@ enum WarpBackgroundTyping {
             }
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
+        if let scriptPath { await previous.set(doneMarkerPath(forScript: scriptPath)) }
         logger.debug("typed \(command.utf16.count) units into \(terminal.rawValue) (pid \(pid)) in the background")
         return (true, nil)
         #else
         return (false, "Typing into \(terminal.rawValue) needs macOS.")
-        #endif
-    }
-
-    /// Press a menu item in Warp's menu bar through Accessibility, without
-    /// activating Warp.
-    @discardableResult
-    static func pressMenuItem(
-        menu: String,
-        item: String,
-        in terminal: TerminalConfig.TerminalType,
-        logger: Logger
-    ) -> (success: Bool, error: String?) {
-        #if canImport(AppKit)
-        guard AXIsProcessTrusted() else {
-            return (false, "Accessibility permission is missing for this binary.")
-        }
-        guard let pid = runningPid(for: terminal) else {
-            return (false, "\(terminal.rawValue) isn't running.")
-        }
-        markMainWindow(pid: pid, logger: logger)
-
-        let app = AXUIElementCreateApplication(pid)
-        guard let menuBar: AXUIElement = attribute(app, kAXMenuBarAttribute),
-              let menuBarItem = children(of: menuBar).first(where: { title(of: $0) == menu }),
-              let menuElement = children(of: menuBarItem).first,
-              let menuItem = children(of: menuElement).first(where: { title(of: $0) == item }) else {
-            return (false, "Menu item \"\(menu) > \(item)\" not found in \(terminal.rawValue).")
-        }
-        let status = AXUIElementPerformAction(menuItem, kAXPressAction as CFString)
-        guard status == .success else {
-            return (false, "Pressing \"\(menu) > \(item)\" failed (AXError \(status.rawValue)).")
-        }
-        return (true, nil)
-        #else
-        return (false, "Menu items in \(terminal.rawValue) need macOS.")
         #endif
     }
 
@@ -126,13 +116,45 @@ enum WarpBackgroundTyping {
         }
     }
 
+    /// Wait for a generated script's start marker. On timeout, delete the
+    /// script: keys typed into a busy tab sit in the tty buffer and the shell
+    /// runs them once the tab is free, so without this a send reported as
+    /// failed would still run later. Re-checks the marker after deleting in
+    /// case the script started at the last moment.
+    static func confirmStartOrDisarm(
+        scriptPath: String,
+        timeout: TimeInterval,
+        pollInterval: TimeInterval = 0.1,
+        fileManager: FileManager = .default
+    ) async -> Bool {
+        let marker = startedMarkerPath(forScript: scriptPath)
+        if await waitForFile(marker, timeout: timeout, pollInterval: pollInterval, fileManager: fileManager) {
+            return true
+        }
+        try? fileManager.removeItem(atPath: scriptPath)
+        if fileManager.fileExists(atPath: marker) { return true }
+        // A cancelled script never writes its done marker; don't make the
+        // next send wait for it.
+        await previous.clear(ifEqual: doneMarkerPath(forScript: scriptPath))
+        return false
+    }
+
     /// Error text for a send whose start marker never appeared.
     static func notStartedMessage(terminal: TerminalConfig.TerminalType, waited: TimeInterval) -> String {
         """
+        ❌ \(terminal.rawValue) didn't start the command within \(Int(waited))s, so it was cancelled.
+        Usually the active tab is still running something, and the keys went to that process. \
+        When it finishes, the shell will run the typed line and print "No such file or directory" \
+        for the deleted script; the command itself won't run. Check the active Warp tab before retrying.
+        """
+    }
+
+    /// Error text for a `send_to_session` the shell shim never saw start.
+    static func notConfirmedMessage(terminal: TerminalConfig.TerminalType, waited: TimeInterval) -> String {
+        """
         ❌ \(terminal.rawValue) didn't start the command within \(Int(waited))s.
-        The keys were sent, but the command never ran. Usually the active tab is still \
-        running something (the keys then went to that process), or Warp's window couldn't \
-        receive input. Check the active Warp tab before retrying.
+        Usually the active tab is still running something. The keys went to that process, and \
+        the shell may still run the command once it finishes. Check the active Warp tab before retrying.
         """
     }
 
@@ -151,7 +173,9 @@ enum WarpBackgroundTyping {
     /// window remains main, and the caller's verification catches the rest.
     private static func markMainWindow(pid: pid_t, logger: Logger) {
         let app = AXUIElementCreateApplication(pid)
-        guard let windows: [AXUIElement] = attribute(app, kAXWindowsAttribute), let window = windows.first else {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement], let window = windows.first else {
             logger.debug("no AX-visible Warp window; typing without setting AXMain")
             return
         }
@@ -178,20 +202,6 @@ enum WarpBackgroundTyping {
         down.postToPid(pid)
         up.postToPid(pid)
         return true
-    }
-
-    private static func attribute<T>(_ element: AXUIElement, _ name: String) -> T? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
-        return value as? T
-    }
-
-    private static func children(of element: AXUIElement) -> [AXUIElement] {
-        attribute(element, kAXChildrenAttribute) ?? []
-    }
-
-    private static func title(of element: AXUIElement) -> String? {
-        attribute(element, kAXTitleAttribute)
     }
     #endif
 }
