@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Bring this fork up to date with upstream.
+#
+#   main  fast-forwarded to upstream/main, pushed to origin
+#   work  rebased onto main, force-pushed to origin (with lease)
+#
+# Fork-only: lives on `work`, never cherry-pick it into an upstream PR branch.
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "Working tree has changes; commit or stash them first." >&2
+  exit 1
+fi
+
+start=$(git branch --show-current)
+
+git fetch upstream
+git fetch origin
+
+git switch --quiet main
+git merge --ff-only upstream/main
+git push origin main
+
+git switch --quiet work
+if ! git rebase main; then
+  echo >&2
+  echo "Rebase stopped on a conflict. Resolve it, then:" >&2
+  echo "  git rebase --continue && git push --force-with-lease origin work" >&2
+  echo "Or back out with: git rebase --abort" >&2
+  exit 1
+fi
+git push --force-with-lease origin work
+
+if [[ -n "$start" && "$start" != "work" ]]; then
+  git switch --quiet "$start"
+fi
+
+echo
+echo "Synced. Your commits on work:"
+git log --oneline main..work
