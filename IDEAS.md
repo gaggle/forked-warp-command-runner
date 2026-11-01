@@ -7,71 +7,9 @@ DONE lists what has landed on `work`. Move items into project management when th
 
 Driving use case: "I ran something in Warp, it broke. Claude, what gives?"
 
-## NOW: Type into Warp without bringing it to the front
+## NOW
 
-**Why.** Every keystroke tool activates Warp before typing (`tell application "Warp" to activate`,
-then System Events `keystroke`). Warp jumps in front, and whatever you're typing lands in Warp's
-input along with the command. You can't work while a process drives Warp.
-
-**Approach (tested 2026-11-01, see facts below).** Don't activate Warp, and don't use System Events.
-
-1. Make Warp's window its main window through Accessibility:
-   `set value of attribute "AXMain" of window 1 to true` on process `stable`.
-2. Post the keystrokes to Warp's process only: `CGEvent` with `keyboardSetUnicodeString`, one event
-   per UTF-16 unit, sent with `postToPid(warpPid)` from a `CGEventSource(stateID: .privateState)`.
-   Return is virtual key 36.
-3. Wait until the previous command has finished before typing. Then confirm the new one ran, using
-   the shell shim's `command_finished` event or `get_recent_warp_blocks`.
-
-**Where it changes.** Every Warp branch that activates and types:
-
-- `keystrokeSendToCurrentTab` (`TerminalSessions.swift`), used by `send_to_session` and the `cd`
-  after a new tab.
-- The Warp branch of `createAppleScript` (`TerminalUtilities.swift`), used by `execute_command` and
-  similar.
-- `newTabAppleScript` / `closeTabAppleScript` for Warp click menu items after activating. Check
-  whether `AXPress` on the menu item works without activating.
-- `open warp://…` (new tab, focus session) activates Warp as a side effect. `open -g` kept a launch
-  config in the background (see facts); untested for `warp://action/new_tab`.
-
-**Done when.**
-
-- No Warp keystroke tool activates Warp. Checked with the front app before and after each call.
-- Typing in another app during a tool call loses nothing on either side.
-- A command that didn't run is reported as an error, not success.
-- The verification gate is green, and the docs describe the new behaviour.
-
-**Facts from the 2026-11-01 tests.** Prototype: a Swift CLI posting to Warp's PID, with one Warp
-window open. Each send was verified via block history or a marker file. Claude (or TextEdit) stayed the front
-app in every case.
-
-| Case | Result |
-|---|---|
-| 20 commands with spaces, double spaces, quotes, `$HOME`, `ü→`, `bash /tmp/wcr_script_N.sh`; 5 ms and 0 ms between keys | All byte-for-byte exact |
-| User holding Shift or Option during the send | Ignored: text exact, Return still runs the command. Cmd untested (could fire Warp shortcuts like Cmd+W) |
-| Ctrl+C (virtual key 8 with `.maskControl`) | Works; ended a stuck `quote>` prompt with exit 130 |
-| User typing in TextEdit while 10 commands were sent | All 10 exact; the user's text intact; TextEdit kept focus |
-| Warp minimized or hidden, without `AXMain` | Keys silently dropped. Not buffered: nothing appeared later |
-| Warp minimized, with `AXMain` | Works. Window un-minimizes **behind** the front window, without taking focus |
-| Warp hidden (Cmd+H), with `AXMain` | Works. Warp un-hides behind the front window |
-| Warp on another Space | Works without `AXMain` while the window is still main. AX can't see the window from another Space |
-| Warp minimized and on another Space, with `AXMain` | Works. AX can see minimized windows; Warp restores onto its own Space and the user stays put |
-| Screen locked (front app `loginwindow`) | Works |
-| Typing the next command while the previous one still runs | Breaks: keys go to the running process. Produced `shift-cle'ar` and a stuck `quote>` |
-
-More facts:
-
-- After a minimize/restore or hide/unhide, Warp's window had `AXMain = false` (`AXFocused = true`),
-  and that alone made Warp drop every key. Setting `AXMain` again fixed it without activating Warp.
-- Without the fix, a dropped send looks the same as a successful one to the sender. Verification
-  is required, not optional.
-- The typing-while-busy race is a likely cause of the dropped-space bug (`bash/tmp/wcr_script_<id>.sh`,
-  exit 127). Unconfirmed.
-- Bundle ID `dev.warp.Warp-Stable`, process name `stable`. Warp Preview's IDs are unchecked.
-- Launch configs: `open -g "warp://launch/<name>"` (name, not path; file in
-  `~/.warp/launch_configurations/`) ran the config's `commands` without activating Warp, but opens a
-  new window every time. The path form did nothing. Better suited to "open a workspace" than to
-  routine commands.
+Nothing picked yet. Take the next one from SOON.
 
 ## SOON
 
@@ -127,6 +65,59 @@ fall back to SIGKILL. Report it upstream first; fix if welcome.
 - Gate terminal-history tools for `--http` callers.
 
 ## DONE
+
+### Type into Warp without bringing it to the front
+
+Warp keystroke tools post `CGEvent`s to Warp's PID (`WarpBackgroundTyping.swift`) after setting
+`AXMain` on its window, instead of `activate` + System Events. `execute_command` and
+`execute_with_streaming` scripts touch `<script>.started` first; no marker within 3 s is an error.
+`send_to_session` confirms through the shim's `preexec` when the shim has sent anything, otherwise
+says it's unconfirmed. New tab uses `open -g`; close tab presses File > Close Tab via `AXPress`.
+Typed events carry no modifier flags, so a held Cmd can't turn letters into Warp shortcuts.
+
+**Unverified on real Warp:**
+
+- The whole path end to end from the installed bundle (the gate doesn't type into Warp).
+- `open -g warp://action/new_tab` and `AXPress` on Close Tab without activating.
+- Clearing flags really neutralises a held Cmd.
+
+**Not done:** waiting for a busy tab *before* typing. Block history only records finished
+commands, and shim events can't be tied to the active tab, so there's no reliable "busy" signal.
+A busy tab still swallows the keys; it's now reported as an error instead of success.
+
+**Facts from the 2026-11-01 tests.**
+
+Prototype: a Swift CLI posting to Warp's PID, with one Warp
+window open. Each send was verified via block history or a marker file. Claude (or TextEdit) stayed the front
+app in every case.
+
+| Case | Result |
+|---|---|
+| 20 commands with spaces, double spaces, quotes, `$HOME`, `ü→`, `bash /tmp/wcr_script_N.sh`; 5 ms and 0 ms between keys | All byte-for-byte exact |
+| User holding Shift or Option during the send | Ignored: text exact, Return still runs the command. Cmd untested (could fire Warp shortcuts like Cmd+W) |
+| Ctrl+C (virtual key 8 with `.maskControl`) | Works; ended a stuck `quote>` prompt with exit 130 |
+| User typing in TextEdit while 10 commands were sent | All 10 exact; the user's text intact; TextEdit kept focus |
+| Warp minimized or hidden, without `AXMain` | Keys silently dropped. Not buffered: nothing appeared later |
+| Warp minimized, with `AXMain` | Works. Window un-minimizes **behind** the front window, without taking focus |
+| Warp hidden (Cmd+H), with `AXMain` | Works. Warp un-hides behind the front window |
+| Warp on another Space | Works without `AXMain` while the window is still main. AX can't see the window from another Space |
+| Warp minimized and on another Space, with `AXMain` | Works. AX can see minimized windows; Warp restores onto its own Space and the user stays put |
+| Screen locked (front app `loginwindow`) | Works |
+| Typing the next command while the previous one still runs | Breaks: keys go to the running process. Produced `shift-cle'ar` and a stuck `quote>` |
+
+More facts:
+
+- After a minimize/restore or hide/unhide, Warp's window had `AXMain = false` (`AXFocused = true`),
+  and that alone made Warp drop every key. Setting `AXMain` again fixed it without activating Warp.
+- Without the fix, a dropped send looks the same as a successful one to the sender. Verification
+  is required, not optional.
+- The typing-while-busy race is a likely cause of the dropped-space bug (`bash/tmp/wcr_script_<id>.sh`,
+  exit 127). Unconfirmed.
+- Bundle ID `dev.warp.Warp-Stable`, process name `stable`. Warp Preview's IDs are unchecked.
+- Launch configs: `open -g "warp://launch/<name>"` (name, not path; file in
+  `~/.warp/launch_configurations/`) ran the config's `commands` without activating Warp, but opens a
+  new window every time. The path form did nothing. Better suited to "open a workspace" than to
+  routine commands.
 
 ### `get_recent_warp_blocks` (fork-only)
 

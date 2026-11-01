@@ -206,15 +206,8 @@ private func keystrokeSendToCurrentTab(terminal: TerminalConfig.TerminalType, co
 private func closeTabAppleScript(for terminal: TerminalConfig.TerminalType) -> String {
     switch terminal {
     case .warp, .warpPreview:
-        return """
-        tell application "\(terminal.rawValue)" to activate
-        delay 0.3
-        tell application "System Events"
-            tell process "\(terminal.rawValue)"
-                click menu item "Close Tab" of menu "File" of menu bar 1
-            end tell
-        end tell
-        """
+        // Warp's tab is closed through Accessibility (closeCurrentTab).
+        return "error \"Warp's tab is closed through Accessibility, not AppleScript\""
 
     case .alacritty:
         return """
@@ -247,6 +240,33 @@ private func closeTabAppleScript(for terminal: TerminalConfig.TerminalType) -> S
         end tell
         """
     }
+}
+
+/// Close the current tab. Warp's "File > Close Tab" is pressed through
+/// Accessibility so Warp stays in the background; others use AppleScript.
+@discardableResult
+private func closeCurrentTab(for terminal: TerminalConfig.TerminalType, logger: Logger) async -> (success: Bool, output: String) {
+    if terminal == .warp || terminal == .warpPreview {
+        let r = WarpBackgroundTyping.pressMenuItem(menu: "File", item: "Close Tab", in: terminal, logger: logger)
+        if let error = r.error { logger.warning("Close Tab failed: \(error)") }
+        return (r.success, r.error ?? "")
+    }
+    return await executeAppleScript(closeTabAppleScript(for: terminal), logger: logger)
+}
+
+/// Wait for a shell-shim `preexec` event for `command` received after the
+/// bus had seen `afterTotal` events.
+private func waitForShimPreexec(command: String, afterTotal: Int, timeout: TimeInterval) async -> Bool {
+    let wanted = command.trimmingCharacters(in: .whitespaces)
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        let events = await shellShimEventBus.events(afterTotal: afterTotal)
+        if events.contains(where: { $0.type == "preexec" && $0.command?.trimmingCharacters(in: .whitespaces) == wanted }) {
+            return true
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+    }
+    return false
 }
 
 // MARK: - AppleScript Execution Helper
@@ -425,26 +445,53 @@ func handleSendToSession(params: CallTool.Parameters, logger: Logger) async -> C
 
     logger.info("Sending command to session '\(name)': \(command)")
 
-    // Build terminal-specific script to target the right tab
-    let script: String
-    switch terminal {
-    case .iterm2:
-        script = iterm2SendToTab(tabIndex: session.tabIndex, command: command)
-    case .terminal:
-        script = terminalSendToTab(tabIndex: session.tabIndex, command: command)
-    case .warp, .warpPreview, .alacritty:
-        // Warp and Alacritty don't support tab targeting via AppleScript
-        // Best effort: activate terminal and type into the current active tab (no new tab)
-        script = keystrokeSendToCurrentTab(terminal: terminal, command: command)
-    }
+    var verificationNote = ""
+    if terminal == .warp || terminal == .warpPreview {
+        // Type into Warp's active tab in the background (no activation).
+        let shimBefore = await shellShimEventBus.snapshot()
+        let typed = await WarpBackgroundTyping.type(command, into: terminal, logger: logger)
+        guard typed.success else {
+            return CallTool.Result(
+                content: [.text("❌ Failed to send command to session '\(name)': \(typed.error ?? "unknown error")")],
+                isError: true
+            )
+        }
+        // An arbitrary command has no start marker; the shell shim's preexec
+        // event is the only confirmation available.
+        if shimBefore.lastAt != nil {
+            let started = await waitForShimPreexec(command: command, afterTotal: shimBefore.total, timeout: warpStartTimeout)
+            guard started else {
+                return CallTool.Result(
+                    content: [.text(WarpBackgroundTyping.notStartedMessage(terminal: terminal, waited: warpStartTimeout))],
+                    isError: true
+                )
+            }
+            verificationNote = "\n• Confirmed started by the shell shim."
+        } else {
+            verificationNote = "\n• Not confirmed: install the shell shim (shell_shim_status) so sends can be verified."
+        }
+    } else {
+        // Build terminal-specific script to target the right tab
+        let script: String
+        switch terminal {
+        case .iterm2:
+            script = iterm2SendToTab(tabIndex: session.tabIndex, command: command)
+        case .terminal:
+            script = terminalSendToTab(tabIndex: session.tabIndex, command: command)
+        case .warp, .warpPreview, .alacritty:
+            // Alacritty doesn't support tab targeting via AppleScript
+            // Best effort: activate terminal and type into the current active tab (no new tab)
+            script = keystrokeSendToCurrentTab(terminal: terminal, command: command)
+        }
 
-    let result = await executeAppleScript(script, logger: logger)
+        let result = await executeAppleScript(script, logger: logger)
 
-    guard result.success else {
-        return CallTool.Result(
-            content: [.text("❌ Failed to send command to session '\(name)': \(result.output)")],
-            isError: true
-        )
+        guard result.success else {
+            return CallTool.Result(
+                content: [.text("❌ Failed to send command to session '\(name)': \(result.output)")],
+                isError: true
+            )
+        }
     }
 
     await sessionManager.updateLastCommand(name: name)
@@ -460,7 +507,7 @@ func handleSendToSession(params: CallTool.Parameters, logger: Logger) async -> C
     return CallTool.Result(
         content: [.text("""
         ✅ Command sent to session "\(name)":
-        $ \(command.count > 80 ? String(command.prefix(80)) + "..." : command)\(terminalNote)
+        $ \(command.count > 80 ? String(command.prefix(80)) + "..." : command)\(verificationNote)\(terminalNote)
         """)],
         isError: false
     )
@@ -521,8 +568,7 @@ func handleCloseSession(params: CallTool.Parameters, logger: Logger) async -> Ca
 
     if closeTab, let terminal = TerminalConfig.TerminalType(rawValue: session.terminal) {
         logger.info("Closing terminal tab for session: \(name)")
-        let script = closeTabAppleScript(for: terminal)
-        await executeAppleScript(script, logger: logger)
+        await closeCurrentTab(for: terminal, logger: logger)
     }
 
     return CallTool.Result(
@@ -578,8 +624,7 @@ func handleCleanupSessions(params: CallTool.Parameters, logger: Logger) async ->
     if closeTabs {
         for session in removed {
             if let terminal = TerminalConfig.TerminalType(rawValue: session.terminal) {
-                let script = closeTabAppleScript(for: terminal)
-                await executeAppleScript(script, logger: logger)
+                await closeCurrentTab(for: terminal, logger: logger)
                 // Brief delay between tab closes to avoid AppleScript race conditions
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }

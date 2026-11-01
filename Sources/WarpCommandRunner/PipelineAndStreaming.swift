@@ -372,23 +372,41 @@ func handleExecuteWithStreaming(params: CallTool.Parameters, logger: Logger, con
     
     // Start the command in background using terminal
     let preferredTerminal = config.getPreferredTerminal() ?? TerminalConfig.getPreferredTerminal()
+    let tempScript = TempFiles.streamScriptPath(commandId: commandId)
     let scriptContent = """
     #!/bin/bash
     umask 077
+    \(startedMarkerLine(forScript: tempScript))
     \(wrappedCommand)
     """
     
-    let tempScript = TempFiles.streamScriptPath(commandId: commandId)
     try scriptContent.write(toFile: tempScript, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: TempFiles.scriptPOSIXPermissions], ofItemAtPath: tempScript)
     
-    // Execute via AppleScript
-    let appleScript = createAppleScript(for: preferredTerminal, command: "bash \"\(escapeForDoubleQuotedShell(tempScript))\"")
-    
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-    process.arguments = ["-e", appleScript]
-    try process.run()
+    let bashCommand = "bash \"\(escapeForDoubleQuotedShell(tempScript))\""
+    if preferredTerminal == .warp || preferredTerminal == .warpPreview {
+        // Warp: type in the background (no activation) and confirm it started.
+        let typed = await WarpBackgroundTyping.type(bashCommand, into: preferredTerminal, logger: logger)
+        guard typed.success else {
+            return CallTool.Result(
+                content: [.text("Failed to send command to \(preferredTerminal.rawValue): \(typed.error ?? "unknown error")")],
+                isError: true
+            )
+        }
+        guard await WarpBackgroundTyping.waitForFile(startedMarkerPath(forScript: tempScript), timeout: warpStartTimeout) else {
+            return CallTool.Result(
+                content: [.text(WarpBackgroundTyping.notStartedMessage(terminal: preferredTerminal, waited: warpStartTimeout))],
+                isError: true
+            )
+        }
+    } else {
+        // Execute via AppleScript
+        let appleScript = createAppleScript(for: preferredTerminal, command: bashCommand)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", appleScript]
+        try process.run()
+    }
     
     // Now stream the output
     var streamedOutput = ""

@@ -12,8 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Linux container build (`Dockerfile`). On Linux the server lists the same 40 tools; the ten that drive Warp or other macOS apps return a "needs macOS" error, and `--http` is refused.
 - `resources/templates/list` answers with an empty list instead of "method not found".
 
+### Changed
+
+- Warp keystroke tools (`execute_command`, `execute_with_auto_retrieve`, `execute_with_streaming`, `run_template`, `send_to_session`) no longer bring Warp to the front. Keys are posted to Warp's process only, so typing in another app during a call isn't mixed into the command. A minimized or hidden Warp window is restored behind the front app. Warp must already be running.
+- `open_terminal_tab` opens Warp's new tab with `open -g`, and `close_session` / `cleanup_sessions` press Warp's **File > Close Tab** through Accessibility, both without activating Warp.
+
 ### Fixed
 
+- `execute_command` and `execute_with_streaming` report an error when Warp didn't start the command within 3 seconds (dropped keys, or the active tab still busy). Before, a dropped send was reported as success. `send_to_session` confirms the start through the shell shim when it's installed.
 - Tests: the test target now compiles and runs on Linux. Remote-mode tests are macOS-only, matching the remote sources.
 - The server exits 0 on SIGTERM or SIGINT. Before, it kept running until stdin closed.
 - The server exits 0 when stdin closes. Before, it exited 1 with "service finished unexpectedly".

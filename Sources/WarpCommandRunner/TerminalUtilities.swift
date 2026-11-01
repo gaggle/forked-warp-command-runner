@@ -27,7 +27,22 @@ func escapeForDoubleQuotedShell(_ string: String) -> String {
         .replacingOccurrences(of: "`", with: "\\`")
 }
 
-/// Create AppleScript for different terminal types
+/// Marker a generated script touches as its first step, so a background
+/// send to Warp can confirm the command actually started.
+func startedMarkerPath(forScript scriptPath: String) -> String {
+    "\(scriptPath).started"
+}
+
+/// Shell line that touches `startedMarkerPath(forScript:)`.
+func startedMarkerLine(forScript scriptPath: String) -> String {
+    ": > \"\(escapeForDoubleQuotedShell(startedMarkerPath(forScript: scriptPath)))\""
+}
+
+/// How long a background Warp send waits for the start marker.
+let warpStartTimeout: TimeInterval = 3
+
+/// Create AppleScript for different terminal types. Warp isn't scripted:
+/// it's typed into in the background via `WarpBackgroundTyping`.
 func createAppleScript(for terminal: TerminalConfig.TerminalType, command: String) -> String {
     // All current callers pass internally-generated commands
     // ("bash /tmp/wcr_script_<uuid>.sh"), but escape regardless so a
@@ -35,16 +50,8 @@ func createAppleScript(for terminal: TerminalConfig.TerminalType, command: Strin
     let escaped = escapeForAppleScript(command)
     switch terminal {
     case .warp, .warpPreview:
-        // Reuse the current active tab — only open_terminal_tab should create new tabs
-        return """
-        tell application "\(terminal.rawValue)" to activate
-        delay 0.3
-        tell application "System Events"
-            keystroke "\(escaped)"
-            delay 0.2
-            keystroke return
-        end tell
-        """
+        // Callers branch to WarpBackgroundTyping first; fail loudly if not.
+        return "error \"Warp is typed into in the background, not via AppleScript\""
 
     case .iterm2:
         // Create a new session (tab) for each command
@@ -111,6 +118,7 @@ func createOutputCaptureScript(command: String, commandId: String) -> String {
     return """
     #!/bin/bash
     umask 077
+    \(startedMarkerLine(forScript: TempFiles.scriptPath(commandId: commandId)))
     
     # Command to execute
     COMMAND='\(command.replacingOccurrences(of: "'", with: "'\"'\"'"))'

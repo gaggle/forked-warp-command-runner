@@ -962,3 +962,88 @@ final class WarpBlockHistoryTests: XCTestCase {
         XCTAssertEqual(rc, SQLITE_OK, String(cString: sqlite3_errmsg(db)))
     }
 }
+
+// MARK: - Background typing into Warp
+
+final class WarpBackgroundTypingTests: XCTestCase {
+
+    func testKeysAreOneEventPerUTF16UnitThenReturn() {
+        let keys = WarpBackgroundTyping.keys(for: "a ü😀")
+        XCTAssertEqual(keys, [
+            .unit(0x61), .unit(0x20), .unit(0xFC),
+            .unit(0xD83D), .unit(0xDE00), // surrogate pair stays two units
+            .returnKey,
+        ])
+        XCTAssertEqual(WarpBackgroundTyping.keys(for: "x", pressReturn: false), [.unit(0x78)])
+    }
+
+    func testWarpIsNeverActivatedByAppleScript() {
+        for terminal in [TerminalConfig.TerminalType.warp, .warpPreview] {
+            let script = createAppleScript(for: terminal, command: "echo hi")
+            XCTAssertFalse(script.contains("activate"))
+            XCTAssertFalse(script.contains("keystroke"))
+        }
+    }
+
+    func testCaptureScriptTouchesStartMarkerFirst() {
+        let id = UUID().uuidString
+        let script = createOutputCaptureScript(command: "echo hi", commandId: id)
+        let marker = startedMarkerLine(forScript: TempFiles.scriptPath(commandId: id))
+        guard let markerRange = script.range(of: marker), let commandRange = script.range(of: "COMMAND=") else {
+            return XCTFail("capture script is missing the start marker or the command")
+        }
+        XCTAssertLessThan(markerRange.lowerBound, commandRange.lowerBound)
+    }
+
+    func testStartMarkerLineWorksInRealShellWithAwkwardPath() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wcr marker $HOME `id` \(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let scriptPath = dir.appendingPathComponent("wcr_script_x.sh").path
+        try "#!/bin/bash\n\(startedMarkerLine(forScript: scriptPath))\n".write(toFile: scriptPath, atomically: true, encoding: .utf8)
+
+        let result = try await runProcess(executablePath: "/bin/bash", arguments: [scriptPath], timeout: 10)
+        XCTAssertEqual(result.exitCode, 0, result.stderr)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: startedMarkerPath(forScript: scriptPath)))
+    }
+
+    func testWaitForFileTimesOutWhenNothingStarts() async {
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
+        let started = await WarpBackgroundTyping.waitForFile(missing, timeout: 0.2, pollInterval: 0.05)
+        XCTAssertFalse(started)
+    }
+
+    func testWaitForFileSeesMarkerWrittenLater() async {
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        Task {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            FileManager.default.createFile(atPath: path, contents: nil)
+        }
+        let started = await WarpBackgroundTyping.waitForFile(path, timeout: 2, pollInterval: 0.02)
+        XCTAssertTrue(started)
+    }
+
+    func testShimBusReturnsOnlyEventsAfterSnapshot() async {
+        let bus = ShellShimEventBus(capacity: 3)
+        func event(_ command: String) -> ShellShimEvent {
+            ShellShimEvent(type: "preexec", command: command, exitCode: nil, warpSessionId: nil, startedAt: nil, ts: "0")
+        }
+        await bus.append(event("old"))
+        let before = await bus.snapshot().total
+        let none = await bus.events(afterTotal: before)
+        XCTAssertEqual(none.count, 0)
+
+        await bus.append(event("a"))
+        await bus.append(event("b"))
+        let two = await bus.events(afterTotal: before)
+        XCTAssertEqual(two.map(\.command), ["a", "b"])
+
+        // More new events than the ring holds: only what's still buffered.
+        await bus.append(event("c"))
+        await bus.append(event("d"))
+        let buffered = await bus.events(afterTotal: before)
+        XCTAssertEqual(buffered.map(\.command), ["b", "c", "d"])
+    }
+}

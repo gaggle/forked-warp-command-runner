@@ -214,8 +214,10 @@ The `execute_with_auto_retrieve` command intelligently detects command types and
 | Native MCP agent panel — chat with Grok, ChatGPT, Claude, Gemini *in* the terminal | ✅ (`~/.warp/.mcp.json`) | ❌ | ❌ |
 | OSC 777 cli-agent event channel for status surfacing | ✅ | ❌ | ❌ |
 | Workspace profile → recognized launch config | ✅ (`~/.warp/launch_configurations/`) | ❌ | ❌ |
-| AppleScript-driven new tab + keystroke send | ✅ | ✅ | ✅ |
+| New tab + keystroke send | ✅ (in the background, no focus change) | ✅ (AppleScript) | ✅ (AppleScript) |
 | Modern UI/UX | ✅ | ⚠️ | ⚠️ |
+
+**Warp stays in the background.** Keystroke tools post key events to Warp's process only, so Warp doesn't come to the front and your own typing in another app isn't mixed in. A minimized or hidden Warp window is restored behind the front app. `execute_command` and `execute_with_streaming` confirm the command actually started and return an error if it didn't (usually because the active tab is still running something). `send_to_session` can only confirm a start when the shell shim is installed; its result says which. Warp must already be running. Needs Accessibility for the bundle; Automation for System Events is no longer used for Warp.
 
 Output capture (`/tmp/<id>.json` polling) and the tools that don't touch the terminal (clipboard, SSH, file watch, env snapshots, etc.) work identically across all terminals.
 
@@ -536,7 +538,7 @@ On `--http` sessions the five Warp-routing tools are refused unless `remote.allo
 | Tool | Description | Use Case |
 |------|-------------|----------|
 | `open_terminal_tab` | Open a new named terminal tab (Warp: via `warp://action/new_tab` deeplink in v6.0) | Long-running processes |
-| `send_to_session` | Send command to a specific tab (AppleScript keystroke; tab-targeting limited on Warp) | Targeted execution |
+| `send_to_session` | Send command to a specific tab (Warp: typed into the active tab in the background; other terminals: AppleScript) | Targeted execution |
 | `list_sessions` | View active terminal sessions | Session overview |
 | `close_session` | Close a named session | Cleanup |
 | `cleanup_sessions` | Bulk-remove stale sessions; optionally close their tabs | Hygiene |

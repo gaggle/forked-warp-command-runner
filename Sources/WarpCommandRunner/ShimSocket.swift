@@ -54,6 +54,12 @@ actor ShellShimEventBus {
         return Array(events.suffix(n))
     }
 
+    /// Events received after the bus had seen `total` events in all.
+    func events(afterTotal total: Int) -> [ShellShimEvent] {
+        let n = min(max(totalReceived - total, 0), events.count)
+        return Array(events.suffix(n))
+    }
+
     func snapshot() -> (count: Int, total: Int, lastAt: Date?) {
         return (events.count, totalReceived, lastConnectedAt)
     }

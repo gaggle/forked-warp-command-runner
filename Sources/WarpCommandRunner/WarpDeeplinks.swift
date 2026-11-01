@@ -20,12 +20,13 @@ import Logging
 enum WarpDeeplinks {
 
     /// Dispatch a `warp://` URL through `open(1)`. Non-blocking; Warp is
-    /// activated/focused by macOS as a side effect.
+    /// activated/focused by macOS as a side effect unless `background` is
+    /// set, which passes `-g` so Warp stays behind the front app.
     @discardableResult
-    static func dispatch(_ url: String, logger: Logger) -> (success: Bool, error: String?) {
+    static func dispatch(_ url: String, background: Bool = false, logger: Logger) -> (success: Bool, error: String?) {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        proc.arguments = [url]
+        proc.arguments = background ? ["-g", url] : [url]
 
         let errPipe = Pipe()
         proc.standardError = errPipe
@@ -52,11 +53,12 @@ enum WarpDeeplinks {
     ///
     /// Replaces the v5 path that ran AppleScript `click menu item "New Tab"`.
     /// Doesn't require Accessibility permission for the open path itself
-    /// (typing into the tab afterwards still does).
+    /// (typing into the tab afterwards still does). Opened in the background
+    /// so Warp doesn't come to the front.
     @discardableResult
     static func openNewTab(directory: String? = nil, logger: Logger) -> (success: Bool, error: String?) {
         let url = buildURL(host: "action", path: "/new_tab", queryItems: queryItems(directory: directory))
-        return dispatch(url, logger: logger)
+        return dispatch(url, background: true, logger: logger)
     }
 
     /// Open a new Warp window, optionally cd'd to `directory`.

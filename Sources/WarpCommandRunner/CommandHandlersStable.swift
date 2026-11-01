@@ -118,14 +118,39 @@ func handleExecuteCommandV2NoMonitoring(params: CallTool.Parameters, logger: Log
     // Send to terminal using AppleScript (via the shared runner: concurrent
     // pipe drain + timeout, and no cooperative-pool blocking)
     let bashCommand = "bash \"\(escapeForDoubleQuotedShell(tempScriptFile))\""
+
+    // Warp: type in the background (no activation), then confirm the script
+    // started, since dropped keys look the same as a good send.
+    if preferredTerminal == .warp || preferredTerminal == .warpPreview {
+        let typed = await WarpBackgroundTyping.type(bashCommand, into: preferredTerminal, logger: logger)
+        guard typed.success else {
+            return CallTool.Result(
+                content: [.text("Failed to send command to \(preferredTerminal.rawValue): \(typed.error ?? "unknown error")")],
+                isError: true
+            )
+        }
+        let started = await WarpBackgroundTyping.waitForFile(
+            startedMarkerPath(forScript: tempScriptFile), timeout: warpStartTimeout
+        )
+        guard started else {
+            logger.error("Warp didn't start command \(commandId)")
+            return CallTool.Result(
+                content: [.text(WarpBackgroundTyping.notStartedMessage(terminal: preferredTerminal, waited: warpStartTimeout))],
+                isError: true
+            )
+        }
+    }
+
     let appleScript = createAppleScript(for: preferredTerminal, command: bashCommand)
 
     do {
-        let dispatch = try await runProcess(
-            executablePath: "/usr/bin/osascript",
-            arguments: ["-e", appleScript],
-            timeout: 30
-        )
+        let dispatch = (preferredTerminal == .warp || preferredTerminal == .warpPreview)
+            ? ProcessRunnerResult(stdout: "", stderr: "", exitCode: 0, timedOut: false)
+            : try await runProcess(
+                executablePath: "/usr/bin/osascript",
+                arguments: ["-e", appleScript],
+                timeout: 30
+            )
 
         if dispatch.timedOut {
             logger.error("osascript timed out dispatching to \(preferredTerminal.rawValue)")
