@@ -3,70 +3,9 @@
 Planning for this fork. Lives on the fork's `work` branch only; never cherry-pick it into an
 upstream PR branch.
 NOW is the next story in detail, SOON are outcome-level epics, LATER is a loose list.
-Move items into project management when they're picked up.
+DONE lists what has landed on `work`. Move items into project management when they're picked up.
 
 Driving use case: "I ran something in Warp, it broke. Claude, what gives?"
-
-## NOW: Ship `get_recent_warp_blocks` upstream
-
-**Why.** The narrowest useful slice works end to end (Claude Desktop read a real failing `ls /foo`,
-exit 2). Getting it in front of the maintainer now gives feedback on direction and conventions before
-we broaden anything.
-
-**Starting point.** Branch `feat/warp-block-history`, 3 commits on top of `43944d7`:
-
-1. `3ff91a4` Find Warp's database in its app group container.
-2. `4322abf` Add a read-only reader for Warp's block history.
-3. `e95e2b2` Add get_recent_warp_blocks tool for the active Warp tab.
-
-54 tests green. The release build, stdio proof (41 tools), HTTP proof and version check all pass.
-
-**Done when.**
-
-- The active-tab assumptions are verified on real Warp, or their limits are stated in the tool
-  description and README.
-- Docs match the binary (AGENTS.md: "Done means the verification gate is green, docs match the binary").
-- The full verification gate is green, with summary lines quoted.
-- A PR is open from a fork, with the description points below.
-
-**Steps.**
-
-1. **Freshness of the active tab.** Blocks are saved as they complete, but `windows.active_tab_index`
-   is part of Warp's layout snapshot. In Warp: run `echo one` in tab A, switch to tab B without running
-   anything, then call the tool.
-   - Expect tab B's title, cwd and last command.
-   - If it still shows tab A, time how long Warp takes to save. If it's more than a second or two, say
-     "may lag briefly after switching tabs" in the tool description.
-2. **Tab order.** The tool assumes `tabs` ordered by `id` matches what `active_tab_index` counts.
-   Reorder a tab by dragging, and move one between tab groups. Check that "tab N of M" and the content
-   match what's on screen after each change.
-3. **Multiple windows.** Open a second Warp window and call the tool. Expect the "Warp has 2 windows
-   open..." refusal. Note whether `app.active_window_id` gets populated. If it does, add a test for it.
-   Today `testUsesRecordedActiveWindow` assumes the column is used.
-4. **Docs.**
-   - README tool table: add a "Warp block history" table (or a row under "Warp v6.0 — deeplinks,
-     OSC 777, shell shim") for `get_recent_warp_blocks`.
-   - Tool counts: "40"/"Forty" → 41 and "34" → 35. There are 10 mentions in README, plus AGENTS.md
-     gate step 3 ("tools/list → 40 tools").
-   - CHANGELOG: entry under `[Unreleased]`. No version bump (the maintainer's call; the gate requires
-     `AppIdentity.version`, CHANGELOG and README to agree).
-   - README's Sequoia recipe: one line saying Full Disk Access also lets the server read Warp's history.
-5. **Gate.** Run all five steps from AGENTS.md:
-   `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` for step 1, and
-   `./examples/run_test.sh` / `./examples/run_http_test.sh` against `.build/release/warp-command-runner`.
-6. **Fork and PR.** Ask before pushing or opening the PR. `origin` is M-Pineapple's repo, so:
-   `gh repo fork M-Pineapple/warp-command-runner --remote --remote-name fork`, push the branch to
-   `fork`, then open the PR against `M-Pineapple:main`. Keep commits atomic and in the repo's message
-   style (plain imperative sentence ending with a period).
-7. **PR description points.**
-   - Needs Full Disk Access on the bundle, because Warp's data lives in its app group container (App
-     Data protection). This is already part of the Sequoia recipe.
-   - Warp's schema is internal; failures surface as readable errors, not crashes.
-   - `TerminalConfig.getWarpDatabasePath` pointed at Warp's old location and had no callers; this fixes
-     and reuses it.
-   - Ask about remote policy: the tool isn't gated for `--http` callers, since they can already run
-     anything through `execute_pipeline`. Would the maintainer prefer gating terminal history anyway?
-   - Mention it's the first of small increments (see SOON) and ask whether that direction is welcome.
 
 ## NOW: Type into Warp without bringing it to the front
 
@@ -185,7 +124,29 @@ fall back to SIGKILL. Report it upstream first; fix if welcome.
   then type. Unknown whether Warp's deeplink accepts that UUID.
 - A real "active window" signal for multi-window setups, if `app.active_window_id` stays NULL.
 - Explicit schema checks (expected columns present) beyond today's generic "schema may have changed".
-- Gate terminal-history tools for `--http` callers, if upstream wants it.
+- Gate terminal-history tools for `--http` callers.
+
+## DONE
+
+### `get_recent_warp_blocks` (fork-only)
+
+Reads the active Warp tab's recent blocks (command, output, exit code, cwd) from Warp's
+`warp.sqlite`, read-only. Verified from Claude Desktop with a real failing `ls /foo` (exit 2).
+Commits on `work`: `8034d97`, `f6307b2`, `1226f54`.
+
+**Fork-only.** Upstream lists "Reading Warp's internal SQLite" as a non-goal (PRODUCT.md, and the
+v6.0.0 CHANGELOG): the schema changes too often. v6.0 deleted the old `WarpDatabaseIntegration.swift`
+for that reason. The same applies to anything else built on Warp's database (tab awareness, history
+search).
+
+**Unverified on real Warp:**
+
+- Freshness: `windows.active_tab_index` is part of Warp's layout snapshot, so it may lag right after
+  switching tabs.
+- Tab order: assumes `tabs` ordered by `id` matches what `active_tab_index` counts. Untested after
+  dragging tabs or moving them between tab groups.
+- Multiple windows: should refuse with "Warp has 2 windows open...". Unknown whether
+  `app.active_window_id` gets populated; `testUsesRecordedActiveWindow` assumes it does.
 
 ## What's happened
 
