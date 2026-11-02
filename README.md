@@ -11,7 +11,7 @@
 
 <img src="assets/demo.gif" alt="warp-command-runner printing version 8.0.0 and its help" width="720"/>
 
-**Give any chat AI a real terminal.** You ask in Warp, Claude Desktop, ChatGPT desktop, or any other MCP host. The model types the command into your [Warp](https://app.warp.dev/referral/G9W3EY) tab, captures the output, and tells you what happened. Forty tools: command execution, project setups, file watching, SSH, clipboard, environment intelligence. macOS, Swift, open source.
+**Give any chat AI a real terminal.** You ask in Warp, Claude Desktop, ChatGPT desktop, or any other MCP host. The model types the command into your [Warp](https://app.warp.dev/referral/G9W3EY) tab, captures the output, and tells you what happened. This fork provides 41 tools for command execution, Warp history, project setup, file watching, SSH, clipboard, and environment intelligence. macOS, Swift, open source.
 
 This is for people who **don't live in Cursor or Claude Code**. If you already chat with Grok, ChatGPT, Claude, or Gemini from a desktop app (especially Warp's agent panel), add this MCP and that chat can read your files and run commands on your machine.
 
@@ -19,9 +19,11 @@ This is for people who **don't live in Cursor or Claude Code**. If you already c
 
 **Can any cloud AI use this?** Any **local MCP host** can, over stdio. Phone apps and websites need **remote MCP**: you run `--http` and publish HTTPS with a tunnel **you** own. Guide: [`docs/REMOTE.md`](docs/REMOTE.md). Matrix: [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md).
 
-## What's new in v8.0.2
+## What's new in v8.0.4
 
-Release 8.0.2 builds with swift-sdk 0.12.1 (no local patch) and ships a committed `Package.resolved` so a fresh clone resolves the same versions. Remote `--http` pairing from 8.0.1 still applies: a one-time code shown on the Mac authorizes a new client. Remote-mode users should update and delete `~/.warp-command-runner/oauth-store.json` to re-pair. Details: [`docs/REMOTE.md`](docs/REMOTE.md).
+Release 8.0.4 hardens command-script and output storage, command-blocking checks, remote request-size limits, and `WCR_HOME` validation. See [`CHANGELOG.md`](CHANGELOG.md).
+
+The fork's unreleased changes add `get_recent_warp_blocks`, which reads completed commands from Warp's active tab and requires Full Disk Access.
 
 The data folder is `~/.warp-command-runner` unless you set `WCR_HOME` (see [Data directory](#data-directory)).
 
@@ -35,7 +37,7 @@ cd warp-command-runner
 ./build.sh
 ```
 
-`./build.sh` resolves packages, applies the required swift-sdk patch, builds the release binary, and wraps it in `.build/release/warp-command-runner.app`.
+`./build.sh` resolves packages, builds the release binary, and wraps it in `.build/release/warp-command-runner.app`.
 
 Point your host at the binary inside that bundle. For Warp Agent, merge this into `~/.warp/.mcp.json` and replace the path with yours:
 
@@ -72,7 +74,7 @@ Config, command history, templates, and SSH profiles live in `~/.warp-command-ru
 
 When `WCR_HOME` is set to a valid path, the server does not copy `~/.claude-command-runner` into that folder.
 
-An unsigned build is enough for the 34 non-keystroke tools. The five Warp-routing tools need a signed `.app` in `/Applications/`. Host snippets, signing, and the Sequoia recipe are under [Installation](#installation). Phone and website hosts need `--http` plus your own HTTPS tunnel. See [`docs/REMOTE.md`](docs/REMOTE.md).
+An unsigned build supports most tools that do not type into a terminal or read Warp's app-group data. The five Warp-routing tools need a signed `.app` in `/Applications/`; `get_recent_warp_blocks` needs Full Disk Access. Host snippets, signing, and the Sequoia recipe are under [Installation](#installation). Phone and website hosts need `--http` plus your own HTTPS tunnel. See [`docs/REMOTE.md`](docs/REMOTE.md).
 
 ## What's new in v8.0.0 — remote MCP
 
@@ -138,7 +140,7 @@ The protocol is MCP. The **value** depends on whether the host is local and whet
 - **You use Cursor or Claude Code and want everything in one pane?** → You probably don't need this.
 - **You only use a website or phone chatbot?** → Stdio cannot reach that tab. Enable remote MCP (`docs/REMOTE.md`) or use a desktop MCP host.
 
-Five of the 40 tools (`execute_command`, `execute_with_auto_retrieve`, `execute_with_streaming`, `run_template`, `send_to_session`) are the Warp-routing ones. The rest are ordinary server-side utilities (clipboard, SSH, snapshots, …) that work from any host.
+Five of the 41 tools (`execute_command`, `execute_with_auto_retrieve`, `execute_with_streaming`, `run_template`, `send_to_session`) route commands into a terminal. The others cover command utilities and integrations such as clipboard, SSH, workspace profiles, and Warp history; some require macOS or extra permissions.
 
 ## 🎯 Key Features
 
@@ -246,7 +248,7 @@ cd warp-command-runner
 export WCR_CODESIGN_IDENTITY="<your-cert-sha1>"   # optional if auto-detect finds one; persist in ~/.zshrc
 ./build.sh
 ```
-> Only need the 34 non-keystroke tools (incl. `execute_pipeline`)? An unsigned build is fine — skip the `export`.
+> Only need subprocess-based tools such as `execute_pipeline`? An unsigned build is fine; skip the `export`.
 
    `./build.sh` writes two things: the app bundle `.build/release/warp-command-runner.app` (use this) and the bare binary `.build/release/warp-command-runner`. It does **not** install anything into `/Applications/`. To use the `/Applications/` paths in the snippets below, copy the bundle there yourself:
    ```bash
@@ -290,15 +292,15 @@ export WCR_CODESIGN_IDENTITY="<your-cert-sha1>"   # optional if auto-detect find
 
    After `./build.sh` you can also point at `$(pwd)/.build/release/warp-command-runner.app/Contents/MacOS/warp-command-runner` before copying the bundle to `/Applications/`.
 
-   > **Upgrading from v6.0.0–6.0.2?** Edit your existing config file and append `.app/Contents/MacOS/warp-command-runner` to the path. The legacy bare-binary path still works for the 34 non-keystroke tools, but `execute_command` / `execute_with_auto_retrieve` / `execute_with_streaming` / `run_template` / `send_to_session` will silently fail without the bundle path.
+   > **Upgrading from v6.0.0–6.0.2?** Edit your existing config file and append `.app/Contents/MacOS/warp-command-runner` to the path. The legacy bare-binary path still works for most non-keystroke tools, but `execute_command` / `execute_with_auto_retrieve` / `execute_with_streaming` / `run_template` / `send_to_session` will silently fail without the bundle path.
 
-3. **Grant Accessibility permission** (only required for `send_to_session` keystroke injection in v6.0; tab/window opening uses deeplinks and does not require it):
+3. **Grant Accessibility permission** (required for command tools that type into Warp and for keystroke injection in other terminals; Warp tab/window opening through deeplinks does not require it):
    - Open **System Settings → Privacy & Security → Accessibility**
-   - Click **+** and navigate to `warp-command-runner/.build/release/`
-   - Press **Cmd+Shift+.** to reveal the hidden `.build` folder
-   - Select the `warp-command-runner` binary and toggle it **on**
+   - Click **+** and press **Cmd+Shift+.** in the file picker to reveal `.build` if needed
+   - Select the `warp-command-runner` executable inside the `.app` bundle used by your MCP host. For a build in the repository, use `.build/release/warp-command-runner.app/Contents/MacOS/warp-command-runner`.
+   - Toggle the permission **on**
 
-> **Important:** macOS tracks permissions by binary identity. After every rebuild (`./build.sh`), you must remove the old entry and re-add the new binary in Accessibility settings.
+> **Important:** macOS ties Accessibility grants to binary identity. If a rebuilt executable loses access, see [macOS Accessibility Permission Issues](#macos-accessibility-permission-issues) to refresh the grant.
 
 4. **Restart your MCP host(s)** (Warp, Claude Desktop, ChatGPT desktop, …).
 
@@ -317,7 +319,7 @@ docker build -t warp-command-runner .
 docker run -i --rm warp-command-runner
 ```
 
-On Linux it lists the same 40 tools. The ten that drive Warp or other macOS apps (`execute_command`, `execute_with_auto_retrieve`, `execute_with_streaming`, `run_template`, `send_to_session`, `open_terminal_tab`, `focus_warp_session`, `copy_to_clipboard`, `read_from_clipboard`, `add_file_watch`) return a "needs macOS" error. `execute_pipeline`, `execute_and_parse`, `ssh_execute` and the history, template and analysis tools work. Remote mode (`--http`, `--install-agent`) is macOS only.
+On Linux it lists the same 41 tools. The ten that drive Warp or other macOS apps (`execute_command`, `execute_with_auto_retrieve`, `execute_with_streaming`, `run_template`, `send_to_session`, `open_terminal_tab`, `focus_warp_session`, `copy_to_clipboard`, `read_from_clipboard`, `add_file_watch`) return a "needs macOS" error. `get_recent_warp_blocks` also requires Warp's session-restoration database and Full Disk Access. `execute_pipeline`, `execute_and_parse`, `ssh_execute` and the history, template and analysis tools work. Remote mode (`--http`, `--install-agent`) is macOS only.
 
 ### Upgrading from a previous version
 
@@ -348,7 +350,7 @@ If you use remote `--http` mode, delete `~/.warp-command-runner/oauth-store.json
 
 ### 🛡️ macOS Sequoia full setup recipe (the 7 ordered steps)
 
-> If `execute_command` / `execute_with_auto_retrieve` / `execute_with_streaming` / `run_template` / `send_to_session` fail with `osascript is not allowed to send keystrokes (1002)` even though you've toggled every panel in System Settings, **follow this in order — skipping any step leaves a silent denial somewhere in the chain.** The other 34 tools work without any of this; `execute_pipeline` is a fully-functional substitute if you want to skip the whole TCC saga entirely.
+> If a keystroke tool fails with `osascript is not allowed to send keystrokes (1002)` when you target iTerm, Terminal, or Alacritty, **follow this in order — skipping any step leaves a silent denial somewhere in the chain.** This recipe covers AppleScript-based terminal input. For Warp commands that report `Accessibility permission is missing for this binary`, use [macOS Accessibility Permission Issues](#macos-accessibility-permission-issues). Other tools do not use the AppleScript path. Use `execute_pipeline` as a subprocess-based substitute if you want to avoid terminal keystrokes.
 >
 > This is the empirically-verified recipe from a real 6-hour debugging session. v6.0.3+ ships the bundle infrastructure that makes this possible; v6.0.4 is this documentation pass.
 
@@ -480,7 +482,7 @@ Pure subprocess, no AppleScript, no TCC layer, captures output cleanly, works on
 
 ## Usage
 
-### Available Tools (40)
+### Available Tools (41)
 
 On `--http` sessions the five Warp-routing tools are refused unless `remote.allowKeystrokeTools` is true. Use `execute_pipeline`. See [`docs/REMOTE.md`](docs/REMOTE.md).
 
@@ -573,6 +575,7 @@ On `--http` sessions the five Warp-routing tools are refused unless `remote.allo
 | `focus_warp_session` | Dispatch `warp://session/<uuid>` to focus a Warp pane (UUID must be one Warp recognises — typically from the optional shell shim's events) | Resume work in a specific pane |
 | `emit_warp_event` | Build a `printf` invocation that emits an OSC 777 `warp://cli-agent` JSON event into Warp's UI. Required: `event_type` (`session_start` / `prompt_submit` / `tool_complete` / `stop` / `permission_request` / `idle_prompt`). The returned `printf` must be run inside a Warp pane (e.g. via `execute_command`) to take effect | Status notifications |
 | `shell_shim_status` | Report optional shell-shim socket state and recent events | Verify shim is wired up |
+| `get_recent_warp_blocks` | Read recent completed commands from Warp's active tab, including output, exit code, working directory, and git branch | Investigate a recent command; requires Full Disk Access |
 
 ### Example Workflows
 
@@ -766,7 +769,7 @@ For longer commands, use `execute_with_streaming` instead.
 
 ### macOS Permission Error: "osascript is not allowed to send keystrokes" (Error 1002)
 
-This error affects the 5 AppleScript-keystroke-routed tools (`execute_command`, `execute_with_auto_retrieve`, `execute_with_streaming`, `run_template`, `send_to_session`). The other 34 tools — including `execute_pipeline` — are unaffected.
+The five terminal keystroke tools (`execute_command`, `execute_with_auto_retrieve`, `execute_with_streaming`, `run_template`, and `send_to_session`) use Warp background typing or AppleScript, depending on the selected terminal. Error 1002 applies to AppleScript-based command sending to iTerm, Terminal, or Alacritty. Other tools such as `execute_pipeline` are unaffected. For Warp's `Accessibility permission is missing for this binary` error, see [macOS Accessibility Permission Issues](#macos-accessibility-permission-issues).
 
 **Don't waste hours toggling System Settings panels.** This is a layered problem with macOS Sequoia's TCC + sandbox enforcement, and partial fixes leave silent denials in deeper layers. The canonical fix is the [**🛡️ macOS Sequoia full setup recipe**](#-macos-sequoia-full-setup-recipe-the-7-ordered-steps) above (in the Installation section) — seven ordered steps including: build the `.app` bundle, install into `/Applications/` (not `.build/`), `tccutil reset` for the bundle ID, and grant THREE TCC permissions including the surprise one (**Full Disk Access** on the bundle — sandbox preflights this before allowing the keystroke chain). Follow it top to bottom; skipping any step leaves a hidden denial.
 
@@ -786,7 +789,7 @@ You'll see one of:
 // Use execute_pipeline instead of execute_command:
 {"steps": [{"command": "git status"}]}
 ```
-Pure subprocess, no AppleScript, zero TCC. Works on any macOS regardless of permissions. The 34 non-keystroke tools all work too.
+Pure subprocess, no AppleScript, zero TCC. Works on any macOS regardless of permissions. Other subprocess tools, including `execute_pipeline`, work without the keystroke permissions.
 
 **Bundle ID Reference:** `com.m-pineapple.warp-command-runner` (this project), `com.anthropic.claudefordesktop` (Claude Desktop).
 
@@ -794,30 +797,33 @@ Pure subprocess, no AppleScript, zero TCC. Works on any macOS regardless of perm
 
 ### macOS Accessibility Permission Issues
 
-The MCP binary requires **Accessibility** permission only for the AppleScript keystroke path used by `send_to_session` (typing into a specific Warp tab) and the legacy non-Warp paths in `execute_command` for iTerm/Terminal/Alacritty. **Most v6.0 tools work without Accessibility:** subprocess-based execution, `warp://` deeplinks for tab opening, clipboard, SSH, env snapshots, file watch, profiles, and all 24 server-side tools.
+Terminal keystroke tools need **Accessibility** permission. This includes Warp command tools (`execute_command`, `execute_with_auto_retrieve`, `execute_with_streaming`, and `run_template`), `send_to_session`, and legacy command-sending paths for iTerm, Terminal, and Alacritty. Warp tab/window opening through deeplinks does not need Accessibility. Other tools, including `execute_pipeline`, clipboard, SSH, environment snapshots, file watching, and profiles, work without it.
 
 **Symptoms (when it does matter):**
 - Error message: `osascript is not allowed assistive access. (-1719)`
-- `send_to_session` fails; clipboard, SSH, env-context, deeplink-based `open_terminal_tab` all work fine
+- Error message: `Accessibility permission is missing for this binary`
+- A terminal keystroke tool fails while non-keystroke tools such as clipboard, SSH, environment snapshots, and deeplink-based `open_terminal_tab` still work
 
 **Solution:**
 
 1. Open **System Settings → Privacy & Security → Accessibility**
-2. Click the **+** button and navigate to your `warp-command-runner` binary:
+2. Click the **+** button, then press **Cmd+Shift+.** in the file picker to reveal `.build` if needed.
+3. Select the `warp-command-runner` executable inside the `.app` bundle used by your MCP host:
    ```
-   /path/to/warp-command-runner/.build/release/warp-command-runner
+   /path/to/warp-command-runner/.build/release/warp-command-runner.app/Contents/MacOS/warp-command-runner
    ```
-3. The `.build` folder is hidden by default — press **Cmd+Shift+.** in Finder to reveal it
 4. Toggle the permission **on** for the binary
 
-**Important:** macOS tracks Accessibility permissions by binary identity. After every `swift build`, the binary changes and you must **re-add it** to the Accessibility list. This only affects keystroke-injection paths — most tools are unaffected.
+If the error persists in **GitHub Copilot** after enabling the runner binary, also enable **GitHub Copilot.app** in the Accessibility list.
+
+**Important:** macOS tracks Accessibility permissions by binary identity. If an unsigned or ad-hoc rebuild invalidates the grant, remove the old entry and add the executable from the rebuilt `.app` bundle. Stable code signing can preserve the grant across rebuilds. This only affects keystroke-injection paths; most tools are unaffected.
 
 ---
 
 ### MCP Not Responding
 1. Check the client logs (Claude Desktop or Warp). The default server is a child of the client over stdio. Remote MCP (`--http`) listens on `127.0.0.1` only — see [`docs/REMOTE.md`](docs/REMOTE.md).
 2. Restart the client (Claude Desktop and/or Warp).
-3. Rebuild with `./build.sh`. (And re-add the binary to Accessibility if `send_to_session` is failing.)
+3. Rebuild with `./build.sh`. (And re-add the binary to Accessibility if a keystroke tool is failing.)
 
 ### Commands Not Appearing in Terminal
 1. Ensure Warp/WarpPreview is running
@@ -870,8 +876,8 @@ If commands execute but aren't saved to the database:
          └─────────────────┴─────────────────┘
                            ▼
          ┌─────────────────────────────────┐
-         │  warp-command-runner v7.0       │
-         │  Swift MCP server · 40 tools    │
+         │  warp-command-runner v8.0.4     │
+         │  Swift MCP server · 41 tools    │
          └─────────┬───────────┬───────────┘
                    │           │
                    ▼           ▼

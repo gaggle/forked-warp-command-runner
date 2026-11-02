@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Linux container build (`Dockerfile`). On Linux the server lists the same 40 tools; the ten that drive Warp or other macOS apps return a "needs macOS" error, and `--http` is refused.
+- `get_recent_warp_blocks` reads recent completed commands from Warp's active tab, including command output, exit code, working directory, and git branch. It requires Full Disk Access.
+- Linux container build (`Dockerfile`). On Linux the server lists the same 41 tools; the ten that drive Warp or other macOS apps return a "needs macOS" error, and `--http` is refused.
 - `resources/templates/list` answers with an empty list instead of "method not found".
 
 ### Changed

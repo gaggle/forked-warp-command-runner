@@ -26,7 +26,7 @@ Run from the repo root on macOS. Quote the summary lines. Triage every failure. 
    Green: `.build/release/warp-command-runner` exists.
 3. Stdio MCP proof against that binary (not debug):
    `./examples/run_test.sh .build/release/warp-command-runner`
-   Green: `initialize → Warp Command Runner v<version>` and `tools/list → 40 tools`.
+   Green: `initialize → Warp Command Runner v<version>` and `tools/list → 41 tools`.
 4. Remote HTTP proof against the same binary:
    `./examples/run_http_test.sh .build/release/warp-command-runner`
    Green: line `LOOPBACK_OK` and initialize version matching `AppIdentity.version`.
